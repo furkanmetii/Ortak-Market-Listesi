@@ -1,0 +1,356 @@
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#176b52">
+<title>Ortak Market Listesi</title>
+<style>
+:root{font-family:system-ui,Arial,sans-serif;color:#17231e;background:#f4f7f5}
+*{box-sizing:border-box}
+body{margin:0;padding:18px 12px}
+main{max-width:700px;margin:auto}
+h1{font-size:28px;margin:8px 0}
+h2{font-size:19px;margin:0 0 12px}
+p{color:#65736b;font-size:14px}
+.card{background:white;border:1px solid #dce5df;border-radius:16px;padding:17px;margin:14px 0}
+.row{display:flex;gap:8px}
+input{width:100%;min-width:0;padding:12px;border:1px solid #d4ded7;border-radius:10px;font:inherit}
+button{padding:11px 14px;border:0;border-radius:10px;background:#176b52;color:white;font:inherit;font-weight:650;cursor:pointer}
+.secondary{background:#e6f4ee;color:#176b52}
+.danger{background:#fff0ef;color:#a52820}
+.row input{flex:1}
+.hidden{display:none!important}
+#status{min-height:24px;font-size:14px;color:#176b52;overflow-wrap:anywhere}
+#status.error{color:#b42318}
+.codebox{background:#e6f4ee;padding:12px;border-radius:12px;margin:14px 0;overflow-wrap:anywhere}
+#code{font-weight:800;letter-spacing:1px;font-size:18px}
+.item{display:flex;align-items:center;gap:10px;border:1px solid #e0e6e1;padding:11px;border-radius:12px;margin-top:8px}
+.item input{width:21px;height:21px;flex:0 0 auto;accent-color:#176b52}
+.item .name{flex:1;overflow-wrap:anywhere;font-weight:600}
+.item .qty{font-size:13px;color:#65736b}
+.item.checked .name{text-decoration:line-through;color:#89948d}
+#saved button{margin:4px 4px 4px 0;font-size:13px}
+small{color:#65736b}
+@media(max-width:480px){.row{flex-wrap:wrap}.row button{width:100%}.card{padding:14px}}
+</style>
+</head>
+<body>
+<main>
+  <h1>✓ Ortak Market Listesi</h1>
+  <p>Liste oluştur, kodu paylaş ve alışverişi birlikte takip et.</p>
+
+  <section id="home">
+    <div class="card">
+      <h2>Yeni liste oluştur</h2>
+      <form id="createForm" class="row">
+        <input id="listName" maxlength="80" placeholder="Örn. Haftalık market" required>
+        <button>Oluştur</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Kodla listeye katıl</h2>
+      <form id="joinForm" class="row">
+        <input id="joinCode" maxlength="40" placeholder="MK-..." required>
+        <button class="secondary">Katıl</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Kayıtlı listeler</h2>
+      <div id="saved"></div>
+      <small>Bu tarayıcıda daha önce açtığın listeler burada saklanır.</small>
+    </div>
+  </section>
+
+  <section id="listPanel" class="card hidden">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h2 id="title">Market listesi</h2>
+      <button id="homeButton" class="secondary">Listeler</button>
+    </div>
+    <small id="summary"></small>
+    <div class="codebox">
+      <small>Listeye katılmak için paylaşım kodu:</small>
+      <div id="code"></div>
+      <button id="copy" class="secondary" style="margin-top:8px">Kodu kopyala</button>
+    </div>
+
+    <form id="itemForm">
+      <input id="itemName" maxlength="120" placeholder="Ürün adı (ör. Süt)" required>
+      <div class="row" style="margin-top:8px">
+        <input id="quantity" maxlength="40" placeholder="Miktar (ör. 2 litre)">
+        <button>Ürün ekle</button>
+      </div>
+    </form>
+    <div id="items"></div>
+    <hr style="border:0;border-top:1px solid #e0e6e1;margin:18px 0">
+    <button id="clear" class="secondary">Alınanları sil</button>
+    <button id="remove" class="danger">Bu cihazdan kaldır</button>
+    <p>Kodu bilen herkes listeyi görüntüleyebilir ve değiştirebilir.</p>
+  </section>
+  <div id="status" role="status" aria-live="polite"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* Supabase Dashboard'dan aldığın değerleri buraya yaz. */
+const SUPABASE_URL = "https://ciokwhabieolelswztcq.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_publishable_GhKRD0xFRsm6panBMi8jPA_DwCM3_Sp";
+
+const $ = id => document.getElementById(id);
+const configured = SUPABASE_URL.startsWith("https://")
+  && !SUPABASE_URL.includes("_BURAYA")
+  && SUPABASE_ANON_KEY.length > 20
+  && !SUPABASE_ANON_KEY.includes("_BURAYA");
+
+const db = configured
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+const STORAGE = "ortak_market_listeleri_v1";
+let saved = loadSaved();
+let currentCode = "";
+let currentList = null;
+let refreshTimer = null;
+let busy = false;
+
+function loadSaved() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE)) || {codes:[],lastCode:""};
+  } catch {
+    return {codes:[],lastCode:""};
+  }
+}
+function saveSaved() {
+  localStorage.setItem(STORAGE, JSON.stringify(saved));
+}
+function normalize(code) {
+  return String(code || "").trim().toUpperCase().replace(/\s/g,"");
+}
+function status(message, error=false) {
+  $("status").textContent = message;
+  $("status").className = error ? "error" : "";
+}
+function errorText(e) {
+  const m = e?.message || String(e);
+  if (/Liste kodu bulunamadi|Invalid or unknown/i.test(m))
+    return "Liste bulunamadı. Kodu kontrol et.";
+  if (/fetch|network/i.test(m))
+    return "İnternet veya Supabase bağlantısını kontrol et.";
+  return "Hata: " + m;
+}
+async function rpc(name, params) {
+  if (!db) throw new Error("Önce Supabase bağlantı ayarlarını yapmalısın.");
+  const {data,error} = await db.rpc(name,params);
+  if (error) throw error;
+  return data;
+}
+function remember(code,name) {
+  saved.codes = saved.codes.filter(x => x.code !== code);
+  saved.codes.unshift({code,name});
+  saved.codes = saved.codes.slice(0,30);
+  saved.lastCode = code;
+  saveSaved();
+  renderSaved();
+}
+function renderSaved() {
+  const box = $("saved");
+  box.replaceChildren();
+  if (!saved.codes.length) {
+    box.textContent = "Henüz kayıtlı listen yok.";
+    return;
+  }
+  saved.codes.forEach(entry => {
+    const b = document.createElement("button");
+    b.className = "secondary";
+    b.textContent = entry.name + " · " + entry.code;
+    b.onclick = () => openList(entry.code);
+    box.appendChild(b);
+  });
+}
+function stopRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
+}
+function showHome() {
+  stopRefresh();
+  currentCode = "";
+  currentList = null;
+  $("home").classList.remove("hidden");
+  $("listPanel").classList.add("hidden");
+  renderSaved();
+}
+function showList() {
+  $("home").classList.add("hidden");
+  $("listPanel").classList.remove("hidden");
+  $("title").textContent = currentList.name;
+  $("code").textContent = currentCode;
+
+  const products = currentList.items || [];
+  $("summary").textContent =
+    products.length + " ürün · " +
+    products.filter(x => x.checked).length + " alındı";
+
+  const box = $("items");
+  box.replaceChildren();
+
+  if (!products.length) {
+    box.textContent = "Listen boş. İlk ürünü ekleyebilirsin.";
+    return;
+  }
+
+  products.forEach(product => {
+    const row = document.createElement("div");
+    row.className = "item" + (product.checked ? " checked" : "");
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = product.checked;
+    check.setAttribute("aria-label",product.name + " alındı");
+    check.onchange = () => changeItem("toggle_market_item", {
+      p_code:currentCode,
+      p_item_id:product.id,
+      p_checked:check.checked
+    });
+
+    const details = document.createElement("div");
+    details.className = "name";
+    details.textContent = product.name;
+
+    if (product.quantity) {
+      const qty = document.createElement("div");
+      qty.className = "qty";
+      qty.textContent = product.quantity;
+      details.appendChild(qty);
+    }
+
+    const del = document.createElement("button");
+    del.className = "danger";
+    del.textContent = "Sil";
+    del.onclick = () => {
+      if (confirm(product.name + " silinsin mi?")) {
+        changeItem("delete_market_item", {
+          p_code:currentCode,p_item_id:product.id
+        });
+      }
+    };
+    row.append(check,details,del);
+    box.appendChild(row);
+  });
+}
+async function openList(rawCode, quiet=false) {
+  const code = normalize(rawCode);
+  if (!code) return;
+
+  try {
+    if (!quiet) status("Liste yükleniyor...");
+    const data = await rpc("get_market_list",{p_code:code});
+    currentCode = code;
+    currentList = data;
+    remember(code,data.name);
+    showList();
+
+    if (!refreshTimer) {
+      refreshTimer = setInterval(() => {
+        if (currentCode) openList(currentCode,true);
+      },4000);
+    }
+    if (!quiet) status("Liste açıldı.");
+  } catch(e) {
+    if (!quiet) status(errorText(e),true);
+  }
+}
+async function changeItem(fn,params) {
+  if (busy) return;
+  busy = true;
+  try {
+    status("Kaydediliyor...");
+    await rpc(fn,params);
+    await openList(currentCode,true);
+    status("Kaydedildi.");
+  } catch(e) {
+    status(errorText(e),true);
+  } finally {
+    busy = false;
+  }
+}
+$("createForm").onsubmit = async e => {
+  e.preventDefault();
+  if (busy) return;
+  const name = $("listName").value.trim();
+  if (!name) return;
+
+  busy = true;
+  try {
+    status("Liste oluşturuluyor...");
+    const result = await rpc("create_market_list",{p_name:name});
+    $("listName").value = "";
+    await openList(result.code);
+  } catch(e) {
+    status(errorText(e),true);
+  } finally {
+    busy = false;
+  }
+};
+$("joinForm").onsubmit = async e => {
+  e.preventDefault();
+  const code = normalize($("joinCode").value);
+  await openList(code);
+  $("joinCode").value = "";
+};
+$("itemForm").onsubmit = async e => {
+  e.preventDefault();
+  if (!currentCode) return;
+  const name = $("itemName").value.trim();
+  const quantity = $("quantity").value.trim();
+  if (!name) return;
+
+  await changeItem("add_market_item",{
+    p_code:currentCode,
+    p_name:name,
+    p_quantity:quantity || null
+  });
+  $("itemName").value = "";
+  $("quantity").value = "";
+};
+$("copy").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(currentCode);
+    status("Liste kodu kopyalandı.");
+  } catch {
+    status("Kodu elle seçip kopyalayabilirsin.");
+  }
+};
+$("homeButton").onclick = showHome;
+$("remove").onclick = () => {
+  if (!currentCode) return;
+  const code = currentCode;
+  saved.codes = saved.codes.filter(x => x.code !== code);
+  if (saved.lastCode === code) saved.lastCode = saved.codes[0]?.code || "";
+  saveSaved();
+  showHome();
+  status("Liste yalnızca bu cihazdan kaldırıldı; sunucudan silinmedi.");
+};
+$("clear").onclick = async () => {
+  if (!currentList) return;
+  const checked = currentList.items.filter(x => x.checked);
+  if (!checked.length) {
+    status("Alınmış olarak işaretlenen ürün yok.");
+    return;
+  }
+  if (!confirm("Alınan " + checked.length + " ürün silinsin mi?")) return;
+  for (const item of checked) {
+    await changeItem("delete_market_item",{
+      p_code:currentCode,p_item_id:item.id
+    });
+  }
+};
+if (configured) {
+  renderSaved();
+  if (saved.lastCode) openList(saved.lastCode,true);
+} else {
+  status("Önce bu dosyadaki Supabase URL ve anahtarını ayarla.",true);
+}
+</script>
+</body>
+</html>
